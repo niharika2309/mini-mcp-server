@@ -1,0 +1,9 @@
+# mini-mcp-server dependencies
+# Official MCP Python SDK (includes the `mcp` CLI: `mcp dev` opens MCP Inspector)
+mcp[cli]>=2.3.0,<3
+# HTTP client used for Substack + the GitHub REST API
+requests>=2.32.0
+# HTML parsing for the Substack article body
+beautifulsoup4>=4.12.0
+# Loads GITHUB_TOKEN from your .env file
+python-dotenv>=1.0.0
