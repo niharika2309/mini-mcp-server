@@ -6,6 +6,8 @@
 
 # Python
 __pycache__/
+.pytest_cache/
+tests/
 *.py[cod]
 *.egg-info/
 .venv/
@@ -17,3 +19,4 @@ venv/
 .idea/
 .vscode/
 *.log
+.pytest_cache/

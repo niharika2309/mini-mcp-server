@@ -1,9 +1,12 @@
 # mini-mcp-server dependencies
 # Official MCP Python SDK (includes the `mcp` CLI: `mcp dev` opens MCP Inspector)
+# The agent layer uses the same SDK's CLIENT side (mcp.client.stdio + ClientSession).
 mcp[cli]>=2.3.0,<3
-# HTTP client used for Substack + the GitHub REST API
+# HTTP client used for Substack + the GitHub REST API (and the agent's LLM calls)
 requests>=2.32.0
 # HTML parsing for the Substack article body
 beautifulsoup4>=4.12.0
-# Loads GITHUB_TOKEN from your .env file
+# Loads GITHUB_TOKEN / LLM_* settings from your .env file
 python-dotenv>=1.0.0
+# Agent side: validate LLM-generated tool arguments against the discovered JSON schemas
+jsonschema>=4.21.0

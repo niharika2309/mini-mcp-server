@@ -1,0 +1,4 @@
+# Development-only dependencies (the agent test-suite).
+#   pip install -r requirements-dev.txt
+#   python -m pytest
+pytest>=8.0.0
