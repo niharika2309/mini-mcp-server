@@ -308,6 +308,8 @@ class RequestHandler(BaseHTTPRequestHandler):
             self._json(200, self.ui.info())
         elif path == "/api/history":
             self._json(200, {"blocks": self.ui.history_blocks()})
+        elif path == "/api/pending":
+            self._json(200, {"approvals": self.ui.pending_approvals_snapshot()})
         elif path == "/api/events":
             self._sse()
         else:
@@ -462,6 +464,12 @@ HTML_PAGE = """<!doctype html>
   .approval pre { background:var(--bg); border:1px solid var(--border); border-radius:8px;
                   padding:8px; overflow:auto; font-size:12px; }
   .approval .btns { display:flex; gap:8px; margin-top:8px; }
+  .approval .fields { margin:6px 0; }
+  .approval .field { display:flex; gap:8px; padding:2px 0; }
+  .approval .field .k { flex:0 0 138px; color:var(--dim); font-size:12px; }
+  .approval .field .v { flex:1 1 auto; min-width:0; word-break:break-word; }
+  .approval details { margin:4px 0; }
+  .approval details summary { cursor:pointer; color:var(--dim); font-size:12.5px; }
   #waiting-banner { display:none; max-width:1100px; margin:0 auto 8px; padding:8px 16px;
                     color:var(--warn); font-weight:600; }
   button { font:inherit; border-radius:8px; padding:6px 16px; cursor:pointer;
@@ -537,6 +545,7 @@ function addToolResult(name, ok, preview) {
 const shownApprovals = new Set();        // dedupe live events vs reconnect/reload replays
 const liveApprovals = new Map();         // id -> card element, while awaiting a decision
 const waitingBanner = document.getElementById("waiting-banner");
+let sawPreview = false;                  // did preview_article run in this session?
 function refreshWaitingUi() {
   waitingBanner.style.display = liveApprovals.size ? "block" : "none";
   if (liveApprovals.size) sendBtn.textContent = "Waiting for approval\\u2026";
@@ -553,9 +562,23 @@ function resolveApprovalCard(id, label) {
   refreshWaitingUi();
   return true;
 }
+// What the write will actually do, spelled out; "confirm" is omitted because
+// the agent sets it only AFTER you approve (the server re-checks it itself).
+const ARG_LABELS = {
+  article: "article",
+  file_path: "destination file",
+  branch: "branch",
+  commit_message: "commit message",
+  overwrite: "overwrite existing file",
+  repo: "repo",
+  path: "destination file",
+};
+const ARG_HIDDEN = new Set(["confirm"]);
+const LONG_FIELD = 160;
 function addApproval(data) {
   if (!data || !data.id || shownApprovals.has(data.id)) return;
   shownApprovals.add(data.id);
+  const args = data.arguments || {};
   const block = add("approval", "", "approval");
   liveApprovals.set(data.id, block);
   block.classList.add("active");
@@ -563,28 +586,75 @@ function addApproval(data) {
   refreshWaitingUi();
   block.appendChild(el("div", "head",
       "\\u26a0 " + data.name + " needs your approval"));
-  if (data.can_write)
+  if (data.can_write) {
     block.appendChild(el("div", "muted",
-      "This can WRITE to GitHub. Check the preview output above for the exact file path and content."));
-  block.appendChild(el("pre", null, JSON.stringify(data.arguments, null, 2)));
+      "This can WRITE to GitHub. Nothing is sent until you click Approve."));
+    if (!sawPreview)
+      block.appendChild(el("div", "warn",
+        "No preview_article output above \\u2014 approve only if the destination and content below are already what you want."));
+  }
+
+  const rows = el("div", "fields");
+  for (const key of Object.keys(args)) {
+    if (ARG_HIDDEN.has(key)) continue;
+    const value = args[key];
+    const text = typeof value === "string" ? value : JSON.stringify(value);
+    if (text.length > LONG_FIELD) {          // long bodies go in a collapsible
+      const box = el("details");
+      box.appendChild(el("summary", null, key + " \\u00b7 " + text.length + " chars"));
+      box.appendChild(el("pre", null, text));
+      rows.appendChild(box);
+    } else {
+      const row = el("div", "field");
+      row.appendChild(el("span", "k", ARG_LABELS[key] || key));
+      row.appendChild(el("span", "v", text));
+      rows.appendChild(row);
+    }
+  }
+  block.appendChild(rows);
+
+  const raw = el("details");
+  raw.appendChild(el("summary", null, "raw arguments"));
+  raw.appendChild(el("pre", null, JSON.stringify(args, null, 2)));
+  block.appendChild(raw);
+
   const btns = el("div", "btns");
   const approve = el("button", "approve", "Approve");
   const deny = el("button", "deny", "Deny");
   const finish = (label, approved) => {
-    if (resolveApprovalCard(data.id, label))
-      api("approval", { id: data.id, approved: approved });
+    if (!resolveApprovalCard(data.id, label)) return;
+    // A failed POST must be visible: otherwise a clicked button looks like a
+    // denial, and the turn just dies at the fail-closed timeout.
+    api("approval", { id: data.id, approved: approved }).then(res => {
+      if (!res || res.ok === false)
+        add("err", "The agent did not accept that decision for " + data.name
+            + " \\u2014 it will auto-deny unless you try again.");
+    }).catch(err => {
+      add("err", "Could not send your decision for " + data.name + ": " + err);
+    });
   };
   approve.onclick = () => finish("Approved by you", true);
   deny.onclick = () => finish("Denied by you", false);
   btns.appendChild(approve); btns.appendChild(deny);
   block.appendChild(btns);
 }
+function pollPendingApprovals() {
+  // Backup path for the buttons: if the SSE stream ever stalls or a tab was
+  // opened late, the pending-approvals endpoint still renders the card.
+  api("pending").then(r => {
+    for (const a of (r && r.approvals) || []) addApproval(a);
+  }).catch(() => {});
+}
 
 const handlers = {
   assistant_text: d => add("agent", d.text),
   tool_call:      d => addToolCall(d.name, d.arguments),
-  tool_result:    d => addToolResult(d.name, d.ok,
-                       (typeof d.payload === "string" ? d.payload : fmt(d.payload)).slice(0, 220)),
+  approval_required: d => addApproval(d),
+  tool_result:    d => {
+                     if (d.name === "preview_article") sawPreview = true;
+                     addToolResult(d.name, d.ok,
+                        (typeof d.payload === "string" ? d.payload : fmt(d.payload)).slice(0, 220));
+                   },
   tool_error:     d => addToolResult(d.name, false, "rejected: " + String(d.error).slice(0, 220)),
   approval_denied:d => { if (resolveApprovalCard(d.id, "Denied by you")) add("tool", "\\u26d4 " + d.name + " DENIED by user \\u2014 not sent to the server", "tool"); },
   approval_confirmed: d => add("note", "human approved \\u2014 setting confirm=true for the server's own check"),
@@ -596,12 +666,18 @@ new EventSource("/api/events").onmessage = e => {
   const h = handlers[msg.event];
   if (h) h(msg.data || {});
 };
+// Never let a missing button be the failure mode: poll the pending list too,
+// so a stalled EventSource still surfaces Approve/Deny.
+setInterval(pollPendingApprovals, 4000);
+pollPendingApprovals();
 
 let busy = false;
 function setBusy(b) {
   busy = b;
   input.disabled = b; sendBtn.disabled = b;
   sendBtn.textContent = b ? "Thinking\\u2026" : "Send";
+  // an approval usually lands a few seconds into the turn - go looking for it
+  if (b) { setTimeout(pollPendingApprovals, 1000); setTimeout(pollPendingApprovals, 3000); }
 }
 document.getElementById("composer").addEventListener("submit", async ev => {
   ev.preventDefault();

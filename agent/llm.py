@@ -75,7 +75,7 @@ Message = Dict[str, Any]  # normalised conversation message (see module docstrin
 def _safe_json_object(raw: Any) -> tuple:
     """Parse tool-call arguments into a dict; return (dict, error_message_or_None)."""
     if isinstance(raw, dict):
-        return raw, None
+        return dict(raw), None  # copy: the agent mutates arguments (confirm=true)
     if raw in (None, ""):
         return {}, None
     if not isinstance(raw, str):

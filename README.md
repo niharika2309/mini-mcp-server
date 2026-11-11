@@ -24,6 +24,11 @@ Everything read from Substack uses only public data (RSS feed + public post
 pages). Writing to GitHub uses your `GITHUB_TOKEN`, and the server refuses to
 commit without your explicit confirmation.
 
+The agent's browser UI (`python -m agent --web`) — a live tool timeline plus
+the discovered tool catalogue in the sidebar:
+
+![mini-mcp agent browser UI: chat, live tool timeline and discovered tools sidebar](docs/screenshots/agent-web-ui-tools.png)
+
 ---
 
 ## What is MCP, in plain English?
@@ -290,13 +295,29 @@ frameworks, no new dependencies, no CDN assets):
 - **Live tool timeline** streamed over Server-Sent Events: `⚙ name {args}`
   when a call starts, `✔ / ✖` with a result preview when it finishes.
 - **Approve/Deny buttons** for dangerous tools - the same approval gate as
-  the terminal y/N, now a click. The card shows the exact arguments and
-  warns when the call can write to GitHub. New cards are highlighted and
-  scrolled into view, and a banner above the composer keeps saying *"waiting
-  for your decision"* until you click - typing "confirm" in the chat does
-  **not** approve anything, only the button click does.
+  the terminal y/N, now a click. After a `preview_article`, the card spells
+  out what would actually be pushed (article, destination file, branch,
+  commit message, overwrite) instead of dumping a blob; long fields and the
+  raw JSON sit behind collapsible sections, and `confirm` is hidden because
+  the agent sets it only *after* you approve. The card warns when the call
+  can write to GitHub, and flags if no preview ran first. New cards are
+  highlighted and scrolled into view, and a banner above the composer keeps
+  saying *"waiting for your decision"* until you click - typing "confirm" in
+  the chat does **not** approve anything, only the button click does.
+- **Buttons that cannot go missing**: cards are replayed to a reconnecting
+  EventSource, and the page also polls `/api/pending` every few seconds (plus
+  just after you send a message), so a stalled SSE stream still surfaces
+  Approve/Deny instead of silently dying at the fail-closed timeout. A
+  decision POST that fails to reach the backend shows an error rather than
+  looking like a click that did nothing.
 - **Tool sidebar** listing the discovered catalogue, flagging which tools
   require approval (`⚠ approval`) - straight from `tools/list`.
+
+Here the agent is about to publish and has paused for a decision. Nothing is
+sent to GitHub until you click **Approve** (typing "confirm" in the chat does
+not approve anything):
+
+![publish_article_to_github approval card with Approve/Deny buttons](docs/screenshots/agent-web-ui-approval.png)
 
 The UI is a thin transport: `agent/web.py` runs the existing `Agent` loop on
 a background event loop and speaks HTTP/SSE to the page. Safeguards are
